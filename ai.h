@@ -4,6 +4,6 @@
 #define AI_H
 #include "gameplay.h"
 
-int  static_eval(const Game *g);
+static int  static_eval(const Game *g);
 Move best_move(const Game *g, int depth);   // call only if a legal move exists
 #endif
