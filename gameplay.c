@@ -390,7 +390,7 @@ void play(Game *g) {
         // --- AI TURN (Black) ---
         if (g->side == BLACK) {
             printf("AI is thinking...\n");
-            Move m = best_move(g, 4); // Depth 3 is fast for initial testing
+            Move m = best_move(g, 6); // Depth 3 is fast for initial testing
             snprintf(ai_msg, sizeof(ai_msg), "AI played: %c%d%c%d%c",
                      'a' + m.fc, m.fr + 1,
                      'a' + m.tc, m.tr + 1,
