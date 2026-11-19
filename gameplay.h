@@ -31,7 +31,7 @@ typedef struct {
 
 
 void init_game(Game *g);
-void print_board(const Game *g);
+void print_board(const Game *g, int bottom);
 int colour_of(char p);
 int parse_move(const char *s, Move *m);
 void add_move(MoveList *l, int fr, int fc, int tr, int tc);

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
 #include "gameplay.h"
 #include "file_handling.h"
 #include "ai.h"
@@ -37,16 +38,19 @@ void init_game (Game *g){
 //initialize the gameboard, only ran once
 
 
-void print_board (const Game *g){
+void print_board (const Game *g, int bottom){
     printf ("\n");
-    for (int r = 7; r >= 0; r--){
+    for (int i = 0; i < 8; i++){
+        int r = (bottom == WHITE) ? 7 - i : i;
         printf ("%d  ", r+1);
-        for (int c = 0; c<8; c++){
+        for (int j = 0; j < 8; j++){
+            int c = (bottom == WHITE) ? j : 7 - j;
             printf ("%c ", g->board[r][c]);
         }
         printf ("\n");
     }
-    printf ("\n   a b c d e f g h\n\n");
+    if (bottom == WHITE) printf ("\n   a b c d e f g h\n\n");
+    else                 printf ("\n   h g f e d c b a\n\n");
 }
 //print the current board, it is run in every move iteration
 
@@ -369,16 +373,56 @@ int is_legal(const Game *g, Move m) {
     return 0;
 }
 
+static int ask_choice (const char *prompt, int max){
+    char buf[50];
+    while (1){
+        printf ("%s", prompt);
+        if (scanf ("%49s", buf) != 1) return -1;
+        int n = atoi (buf);
+        if (n >= 1 && n <= max) return n;
+        printf ("Please enter a number from 1 to %d.\n", max);
+    }
+}
+
 
 void play(Game *g) {
     char input[50];
     char filename[50];
     char ai_msg[32] = "";
+
+    // ---------- setup menu ----------
+    int mode = ask_choice ("1) Play a friend\n2) Play the computer\nChoose: ", 2);
+    if (mode == -1) return;
+
+    int comp = -1;        // colour the computer plays, -1 = no computer
+    int depth = 0;        // search depth for the computer
+    int bottom = WHITE;   // colour shown at the bottom of the board
+
+    if (mode == 2) {
+        int level = ask_choice ("\nDifficulty:\n1) Beginner\n2) Easy\n3) Medium\n4) Hard\n5) Max\nChoose: ", 5);
+        if (level == -1) return;
+        int depths[5] = {2, 3, 4, 5, 6};
+        depth = depths[level - 1];
+
+        int colour = ask_choice ("\nPlay as:\n1) White\n2) Black\n3) Random\nChoose: ", 3);
+        if (colour == -1) return;
+        if (colour == 3) {
+            srand (time (NULL));
+            colour = rand () % 2 + 1;          // 1 or 2
+            snprintf (ai_msg, sizeof (ai_msg), "You are %s.", colour == 1 ? "White" : "Black");
+        }
+        int human = (colour == 1) ? WHITE : BLACK;
+        comp = 1 - human;
+        bottom = human;                        // your pieces stay at the bottom
+    }
+
+    // ---------- game loop ----------
     while (1){
         clear_screen();
-        print_board(g);
+        if (mode == 1) bottom = g->side;       // friend mode: flip every turn
+        print_board(g, bottom);
         if (ai_msg[0] != '\0') {
-            printf("%s\n", ai_msg); // Prints AFTER clear_screen so you can actually read it
+            printf("%s\n", ai_msg);
             ai_msg[0] = '\0';
         }
         int st = game_status(g);
@@ -387,10 +431,11 @@ void play(Game *g) {
         if (g->halfmove >= 100) { printf("Draw by 50-move rule.\n"); break; }
         if (in_check(g, g->side)) printf("Check!\n");
 
-        // --- AI TURN (Black) ---
-        if (g->side == BLACK) {
+        // --- AI TURN ---
+        if (g->side == comp) {
             printf("AI is thinking...\n");
-            Move m = best_move(g, 6); // Depth 3 is fast for initial testing
+            fflush(stdout);
+            Move m = best_move(g, depth);
             snprintf(ai_msg, sizeof(ai_msg), "AI played: %c%d%c%d%c",
                      'a' + m.fc, m.fr + 1,
                      'a' + m.tc, m.tr + 1,
@@ -398,10 +443,10 @@ void play(Game *g) {
             apply_move(g, m);
             continue;
         }
-        // -----------------------
+        // ---------------
 
         while (1){
-            printf("%s to move (e.g. e2e4, 'save f', 'load f', 'quit'): ", 
+            printf("%s to move (e.g. e2e4, 'save f', 'load f', 'quit'): ",
                 g->side == WHITE ? "White" : "Black");
             if (scanf("%49s", input) != 1) return;
             if (strcmp(input, "quit") == 0) return;
@@ -420,7 +465,7 @@ void play(Game *g) {
 
             Move m;
             if (parse_move(input, &m)) {
-                if (!is_legal(g, m)) m.promo = 'q'; 
+                if (!is_legal(g, m)) m.promo = 'q';
                 if (is_legal(g, m)) { apply_move(g, m); break; }
                 else printf("Illegal Move. Try Again.\n");
             }
