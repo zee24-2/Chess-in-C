@@ -1,3 +1,5 @@
+//ai.c
+
 #include <ctype.h>
 #include "ai.h"
 
@@ -17,7 +19,7 @@ static int piece_value (char p){
     }
 }
 
-int static_eval (const Game *g){
+static int static_eval (const Game *g){
     int score = 0;
     for (int r = 7; r >= 0; r--){
         for (int c = 0; c < 8; c++){
@@ -26,8 +28,7 @@ int static_eval (const Game *g){
             int v = piece_value (p);
             char np = tolower((unsigned char)p);
             if (np == 'n' || np == 'b' || np == 'p'){
-                if (r<5 && r>2) v+= 25;
-                if (c<5 && c>2) v+= 25;
+                if ((r<5 && r>2) && (c<5 && c>2)) v+= 50;
             }
             score += (colour_of(p) == WHITE) ? v : -v;
             
@@ -65,20 +66,6 @@ static void order (const Game *g, MoveList *l){
     }
 }
 
-/*
-void insertion_sort_roll(struct student s[], int n)
-{
-    for (int i = 1; i < n; i++) {
-        struct student key = s[i];
-        int j = i - 1;
-        while (j >= 0 && s[j].roll > key.roll) {
-            s[j + 1] = s[j];
-            j--;
-        }
-        s[j + 1] = key;
-    }
-}
-*/
 
 static int negamax (const Game *g, int depth, int alpha, int beta, int ply){
     int side = (g->side == WHITE) ? 1: -1;
@@ -93,6 +80,7 @@ static int negamax (const Game *g, int depth, int alpha, int beta, int ply){
     if (l.count == 0){
         return in_check (g, g->side) ? -MATE + ply : 0;
     }
+    if (g->halfmove >= 100) return 0;
 
     for (int i = 0; i < l.count; i++){
         Game copy = *g;
