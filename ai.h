@@ -3,7 +3,7 @@
 #include "gameplay.h"
 
 extern long ai_nodes;                       // positions searched in the last search
-int  evaluate(const Game *g);
+int  static_eval(const Game *g);
 Move best_move(const Game *g, int depth);   // call only if a legal move exists
 
 #endif
