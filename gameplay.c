@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include "gameplay.h"
 #include "file_handling.h"
+#include <ai.h>
 
 void clear_screen(void) {
     system("clear");
