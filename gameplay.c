@@ -6,7 +6,7 @@
 #include <ctype.h>
 #include "gameplay.h"
 #include "file_handling.h"
-#include <ai.h>
+#include "ai.h"
 
 void clear_screen(void) {
     system("clear");
@@ -373,21 +373,38 @@ int is_legal(const Game *g, Move m) {
 void play(Game *g) {
     char input[50];
     char filename[50];
+    char ai_msg[32] = "";
     while (1){
         clear_screen();
         print_board(g);
+        if (ai_msg[0] != '\0') {
+            printf("%s\n", ai_msg); // Prints AFTER clear_screen so you can actually read it
+            ai_msg[0] = '\0';
+        }
         int st = game_status(g);
         if (st == 1) { printf("Checkmate! %s wins.\n", g->side == WHITE ? "Black" : "White"); break; }
         if (st == 2) { printf("Stalemate. Draw.\n"); break; }
         if (g->halfmove >= 100) { printf("Draw by 50-move rule.\n"); break; }
         if (in_check(g, g->side)) printf("Check!\n");
 
+        // --- AI TURN (Black) ---
+        if (g->side == BLACK) {
+            printf("AI is thinking...\n");
+            Move m = best_move(g, 4); // Depth 3 is fast for initial testing
+            snprintf(ai_msg, sizeof(ai_msg), "AI played: %c%d%c%d%c",
+                     'a' + m.fc, m.fr + 1,
+                     'a' + m.tc, m.tr + 1,
+                     m.promo ? m.promo : '\0');
+            apply_move(g, m);
+            continue;
+        }
+        // -----------------------
+
         while (1){
             printf("%s to move (e.g. e2e4, 'save f', 'load f', 'quit'): ", 
                 g->side == WHITE ? "White" : "Black");
             if (scanf("%49s", input) != 1) return;
             if (strcmp(input, "quit") == 0) return;
-
 
             if (strcmp(input, "save") == 0) {
                 scanf("%49s", filename);
@@ -400,7 +417,6 @@ void play(Game *g) {
                 else printf("Could not load.\n");
                 continue;
             }
-
 
             Move m;
             if (parse_move(input, &m)) {
