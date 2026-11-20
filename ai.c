@@ -67,45 +67,51 @@ static void order (const Game *g, MoveList *l){
 }
 
 
-static int negamax (const Game *g, int depth, int alpha, int beta, int ply){
-    int side = (g->side == WHITE) ? 1: -1;
-    if (depth ==0){
-        return side * static_eval (g);
+static int negamax(const Game *g, int depth, int alpha, int beta, int ply) {
+    if (ply > 0 && (g->halfmove >= 100 || is_threefold(g))) {
+        return 0;
+    }
+
+    int side = (g->side == WHITE) ? 1 : -1;
+    if (depth == 0) {
+        return side * static_eval(g);
     }
 
     int max_eval = -INF;
     MoveList l;
-    gen_legal (g, &l);
-    order (g, &l);
-    if (l.count == 0){
-        return in_check (g, g->side) ? -MATE + ply : 0;
+    gen_legal(g, &l);
+    order(g, &l);
+    if (l.count == 0) {
+        return in_check(g, g->side) ? -MATE + ply : 0;
     }
-    if (g->halfmove >= 100) return 0;
 
-    for (int i = 0; i < l.count; i++){
+    for (int i = 0; i < l.count; i++) {
         Game copy = *g;
-        apply_move (&copy, l.move[i]);
-        int eval = -negamax (&copy, depth-1, -beta, -alpha, ply+1);
-        max_eval = MAX (max_eval, eval);
-        alpha = MAX (alpha, eval);
-        if (alpha>=beta) break;
+        apply_move(&copy, l.move[i]);
+        int eval = -negamax(&copy, depth - 1, -beta, -alpha, ply + 1);
+        max_eval = MAX(max_eval, eval);
+        alpha = MAX(alpha, eval);
+        if (alpha >= beta) break;
     }
     return max_eval;
 }
 
-
-Move best_move(const Game *g, int depth){
+Move best_move(const Game *g, int depth) {
     MoveList l;
-    gen_legal (g, &l);
-    order (g, &l);
-    Move best = l.move [0];
+    gen_legal(g, &l);
+    if (l.count == 0) {
+        Move empty = {0, 0, 0, 0, 0};
+        return empty;
+    }
+    order(g, &l);
+    Move best = l.move[0];
     int alpha = -INF;
     int beta = INF;
-    for (int i = 0; i<l.count; i++){
+    for (int i = 0; i < l.count; i++) {
         Game copy = *g;
-        apply_move (&copy, l.move[i]);
-        int eval = -negamax (&copy, depth-1, -beta, -alpha, 1);
-        if (eval > alpha){
+        apply_move(&copy, l.move[i]);
+        int eval = -negamax(&copy, depth - 1, -beta, -alpha, 1);
+        if (eval > alpha) {
             alpha = eval;
             best = l.move[i];
         }
