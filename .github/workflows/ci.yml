@@ -20,13 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+      - name: Setup Dafny 4.11.0 (with Z3)
+        uses: dafny-lang/setup-dafny@v1
         with:
-          dotnet-version: '8.0.x'
-      - name: Install Dafny
-        run: |
-          dotnet tool install --global dafny --version 4.11.0
-          echo "$HOME/.dotnet/tools" >> $GITHUB_PATH
+          dafny-version: '4.11.0'
       - name: Verify Dafny specification and move generator
         run: dafny verify --verification-time-limit 60 dafny/chess.dfy
