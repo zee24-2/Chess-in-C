@@ -1,16 +1,9 @@
-Here is the updated `README.md`. It keeps your exact structure and detailed breakdown while incorporating every fix:
-
-* Removes the empty `Video Demo:` line and adds a top summary, terminal preview, and **Quick Start** section.
-* Adds a clear **"What Is and Isn't Verified"** section explaining that Dafny verifies the specification compliance (not chess itself or the C files), and accurately documents that `chess.dfy` now proves 36 obligations including the 50-move rule, threefold repetition, and move counters (leaving out only insufficient material).
-* Softens the depth 5–6 speed claim so it isn't overstated.
-* Updates file paths (`src/`, `dafny/`, `tests/`), documents `make test` (C `perft` cross-validation), and adds the GitHub Actions CI badge.
-
 ```markdown
 # Chess in C
 
 ![CI](https://github.com/zee24-2/Chess-in-C/actions/workflows/ci.yml/badge.svg)
 
-A command-line chess engine and game written from scratch in C99, featuring local two-player mode, an alpha-beta Negamax AI opponent across five difficulty levels, FEN persistence, and an independent formal specification and verified move/draw-rule implementation in Dafny.
+A command-line chess engine and game written from scratch in C99, featuring local two-player mode, an alpha-beta Negamax AI opponent with phase-aware Piece-Square Tables across five difficulty levels, FEN persistence, and an independent formal specification and verified move/draw-rule implementation in Dafny.
 
 ```text
 8  r n b q k b n r
@@ -24,8 +17,8 @@ A command-line chess engine and game written from scratch in C99, featuring loca
 
    a b c d e f g h
 
-Computer played e7e5  (14,230 positions searched)
-White to move (e.g. e2e4, 'save f', 'load f', 'quit'):
+AI played: e7e5
+White to move (e.g. e2e4, 'save <file>', 'load <file>', 'quit'):
 
 ```
 
@@ -36,10 +29,10 @@ White to move (e.g. e2e4, 'save f', 'load f', 'quit'):
 make
 ./chess
 
-# Run the C perft move-generation test suite
+# Run the C perft and insufficient-material test suite
 make test
 
-# Verify all 36 proofs in Dafny (requires Dafny 4.11+)
+# Verify all 44 proofs in Dafny (requires Dafny 4.11+)
 dafny verify dafny/chess.dfy
 
 ```
@@ -48,9 +41,9 @@ dafny verify dafny/chess.dfy
 
 ### Description
 
-**Chess in C** is a modular, zero-dependency C99 chess engine and interactive terminal game adhering to standard international chess rules. It supports local two-player matches (auto-flipping the board each turn) and single-player games against a Negamax AI opponent, incorporating full move validation, check/checkmate/stalemate detection, the fifty-move and threefold repetition draw rules, pawn promotion, castling, en passant, and Forsyth–Edwards Notation (FEN) save/load support.
+**Chess in C** is a modular, zero-dependency C99 chess engine and interactive terminal game adhering to standard international chess rules. It supports local two-player matches (auto-flipping the board each turn) and single-player games against a Negamax AI opponent, incorporating full move validation, check/checkmate/stalemate detection, insufficient material draws, the fifty-move and threefold repetition draw rules, pawn promotion, castling, en passant, and Forsyth–Edwards Notation (FEN) save/load support.
 
-Alongside the C codebase, `dafny/chess.dfy` provides a standalone formal specification and verified implementation of the core move rules, draw rules, move counters, and game-status logic in Dafny 4.11 (36 proofs, 0 errors). Both the C engine (`make test`) and the Dafny generator (`dafny run dafny/chess.dfy`) produce identical `perft` node counts across standard Chess Programming Wiki benchmark positions (`start`: 20 / 400 / 8,902; `kiwipete`: 48 / 2,039 / 97,862).
+Alongside the C codebase, `dafny/chess.dfy` provides a standalone formal specification and verified implementation of the core move rules, draw rules, move counters, and game-status logic in Dafny 4.11 (44 proofs, 0 errors). Both the C engine (`make test`) and the Dafny generator (`dafny run dafny/chess.dfy`) produce identical `perft` node counts across standard Chess Programming Wiki benchmark positions (`start`: 20 / 400 / 8,902; `kiwipete`: 48 / 2,039 / 97,862).
 
 ---
 
@@ -58,9 +51,9 @@ Alongside the C codebase, `dafny/chess.dfy` provides a standalone formal specifi
 
 The Dafny file (`dafny/chess.dfy`) serves as a formal methods companion to the C engine. To be precise about what is proved:
 
-* **Proof of specification compliance, not chess itself:** Dafny proves that the loop-based implementations (`IsLegalImpl`, `GenLegal`, `CountImpl`, `GameStatus`) strictly agree with the declarative logic specifications (`Legal`, `Count`, `StatusSpec`) across all possible board states and moves. That proves the implementation matches *this* specification—not that the specification itself is free of rule mistakes (which is why both engines are tested against published `perft` counts and endgame/draw scenarios).
+* **Proof of specification compliance, not chess itself:** Dafny proves that the loop-based implementations (`IsLegalImpl`, `GenLegal`, `IsInsufficientMaterialImpl`, `CountImpl`, `GameStatus`) strictly agree with the declarative logic specifications (`Legal`, `InsufficientMaterial`, `Count`, `StatusSpec`) across all possible board states and moves. That proves the implementation matches *this* specification—not that the specification itself is free of rule mistakes (which is why both engines are tested against published `perft` counts and endgame/draw scenarios).
 * **Separate implementation, not C verification:** `dafny/chess.dfy` is an independent implementation written in Dafny, not a formal proof of the C source files in `src/`. Having two independently written implementations produce identical `perft` counts provides strong cross-validation.
-* **Modeled vs. unmodeled rules in Dafny:** `dafny/chess.dfy` models core piece movement, pins/check, castling, en passant, promotion, checkmate, stalemate, the fifty-move rule, threefold repetition, and halfmove/fullmove counters—covering the ruleset of the C engine except draws by insufficient material (e.g., King vs. King or King + Bishop vs. King).
+* **Complete FIDE rule coverage in Dafny:** `dafny/chess.dfy` models core piece movement, pins/check, castling, en passant, promotion, checkmate, stalemate, insufficient material (`K vs K`, `K+N vs K`, `K+B vs K`, and same-colored `K+B vs K+B`), the fifty-move rule, threefold repetition, and halfmove/fullmove counters—matching the full ruleset of the C engine.
 * **Draw claiming & en passant repetition keys:** Both the C and Dafny implementations treat fifty-move and threefold repetition draws as automatic once reached (rather than requiring a player claim), and include the en passant target square unconditionally in repetition keys (which can occasionally detect a repetition one move later than strict FIDE rules when no en passant capture is actually legal).
 * **Unverified test harnesses:** `ParseFen`, `Perft`, and `Main` inside `dafny/chess.dfy` are executable test helpers and are not formally proved.
 
@@ -106,7 +99,7 @@ Implements board operations, rule enforcement, and the interactive terminal inte
 * **King Safety, Draw Rules, and Status Verification**:
 * `is_attacked` and `in_check`: Detect square attacks via reverse ray/jump checks and test whether the active king is under attack.
 * `gen_legal`: Filters pseudo-legal moves by applying each candidate to a copied state (`Game copy = *g`) and discarding moves that leave the moving side's king in check before appending legal castling moves.
-* `game_status` and `is_threefold`: Evaluate terminal states after every move (and immediately on FEN load), checking checkmate/stalemate before fifty-move (`halfmove >= 100`) and threefold repetition draws.
+* `game_status`, `is_insufficient_material`, and `is_threefold`: Evaluate terminal states after every move (and immediately on FEN load), checking checkmate/stalemate before insufficient material (`K vs K`, `K+N vs K`, `K+B vs K`, and same-colored `K+B vs K+B`), fifty-move (`halfmove >= 100`), and threefold repetition draws.
 * `apply_move`: Updates board squares, handles promotions, revokes spent castling rights, sets/clears en passant targets, updates move clocks, switches turns, and appends the position key to `history`.
 
 
@@ -116,9 +109,9 @@ Implements board operations, rule enforcement, and the interactive terminal inte
 
 Implements the computer opponent using a minimax search engine:
 
-* **Static Board Evaluation (`static_eval`)**: Scores material balance (`Pawn = 100`, `Knight = 300`, `Bishop = 300`, `Rook = 500`, `Queen = 900`) plus positional bonuses for central control by pawns, knights, and bishops.
+* **Static Board Evaluation (`static_eval`, `pst_bonus`)**: Scores material balance (`Pawn = 100`, `Knight = 300`, `Bishop = 300`, `Rook = 500`, `Queen = 900`) combined with piece-specific Piece-Square Tables (PSTs) for pawns, knights, bishops, rooks, queens, and phase-switched king tables (middlegame king safety vs. endgame king centralization when non-pawn material drops to `<= 2600`).
 * **Move Ordering (`move_value`, `order`)**: Uses insertion sort with Most Valuable Victim – Least Valuable Attacker (MVV-LVA) scoring, en passant bonuses, and promotion bonuses to search strong captures first and maximize alpha-beta cutoffs.
-* **Negamax Search with Alpha-Beta Pruning (`negamax`, `best_move`)**: Recursively searches the game tree up to the chosen depth (`2`–`6`), scoring checkmate distances (`-MATE + ply`) and detecting stalemate, fifty-move, and repetition draws inside the search tree.
+* **Negamax Search with Alpha-Beta Pruning (`negamax`, `best_move`)**: Recursively searches the game tree up to the chosen depth (`2`–`6`), scoring checkmate distances (`-MATE + ply`) and detecting stalemate, insufficient material, fifty-move, and repetition draws inside the search tree.
 
 #### 5. `src/file_handling.h` & `src/file_handling.c`
 
@@ -130,16 +123,16 @@ Implements FEN serialization, validation, and disk persistence:
 
 #### 6. `dafny/chess.dfy` (Formal Verification in Dafny)
 
-A formal specification and verified implementation of the core chess rules, draw rules, and move counters written in **Dafny 4.11** (36 proofs, 0 errors):
+A formal specification and verified implementation of the core chess rules, draw rules, and move counters written in **Dafny 4.11** (44 proofs, 0 errors):
 
-* **Declarative Logic Specification**: Defines chess geometry (`PathClear`), attack rules (`PieceAttacks`, `IsAttacked`, `InCheck`), state transitions (`Apply`), special moves (`CastleOK`, `PawnRule`, `PromoOk`), move legality (`PseudoLegal`, `Legal`), and draw conditions (`FiftyMoveDraw`, `ThreefoldRepetition`, `StatusSpec`).
-* **Verified Loop Implementations**: Proves executable loop-based routines (`PathClearImpl`, `AttacksImpl`, `IsAttackedImpl`, `InCheckImpl`, `IsLegalImpl`, `CountImpl`, `GameStatus`) equivalent to their specifications via loop invariants and Z3 theorem proving.
+* **Declarative Logic Specification**: Defines chess geometry (`PathClear`), attack rules (`PieceAttacks`, `IsAttacked`, `InCheck`), state transitions (`Apply`), special moves (`CastleOK`, `PawnRule`, `PromoOk`), move legality (`PseudoLegal`, `Legal`), and draw conditions (`InsufficientMaterial`, `FiftyMoveDraw`, `ThreefoldRepetition`, `StatusSpec`).
+* **Verified Loop Implementations**: Proves executable loop-based routines (`PathClearImpl`, `AttacksImpl`, `IsAttackedImpl`, `InCheckImpl`, `IsLegalImpl`, `IsInsufficientMaterialImpl`, `CountImpl`, `GameStatus`) equivalent to their specifications via loop invariants and Z3 theorem proving.
 * **Soundness, Completeness & Counter Theorems**: Proves `GenLegal` returns *only* legal moves (soundness) and misses *no* legal moves (completeness), alongside `ApplyUpdatesCounters` (verifying halfmove, fullmove, and history updates on every legal move), `LegalNeverLeavesKingInCheck`, `ApplyKeepsBoardSize`, and `LegalMovePassesTurn`.
-* **Perft & Draw Cross-Validation (`Main`)**: Includes an unverified FEN parser and `Perft` runner verifying standard benchmark counts alongside checkmate, stalemate, fifty-move draw, and threefold repetition test cases.
+* **Perft & Draw Cross-Validation (`Main`)**: Includes an unverified FEN parser and `Perft` runner verifying standard benchmark counts alongside checkmate, stalemate, insufficient material, fifty-move draw, and threefold repetition test cases.
 
 #### 7. `tests/perft.c` & `Makefile`
 
-Automates compilation (`make`) and runs `perft` benchmarks (`make test`) to confirm that the C move generator matches `dafny/chess.dfy` and published Chess Programming Wiki node counts.
+Automates compilation (`make`) and runs `perft` benchmarks and insufficient-material unit tests (`make test`) to confirm that the C move generator matches `dafny/chess.dfy` and published Chess Programming Wiki node counts.
 
 ---
 
@@ -147,8 +140,8 @@ Automates compilation (`make`) and runs `perft` benchmarks (`make test`) to conf
 
 1. **Board Representation (2D Char Array vs. Bitboards)**:
 While 64-bit bitboards are standard in high-speed competitive engines, an 8x8 two-dimensional character array (`char board[8][8]`) maps directly to ranks and files, keeping terminal rendering straightforward and move logic readable and easy to debug.
-2. **AI Search Algorithm (Negamax with Alpha-Beta Pruning & MVV-LVA)**:
-Fail-soft/fail-hard Negamax with alpha-beta pruning and MVV-LVA move ordering searches captures and promotions first, significantly reducing the effective branching factor. Lower difficulty levels respond instantaneously, while depths 5–6 typically complete within a few seconds depending on position complexity.
+2. **AI Search Algorithm (Negamax with Alpha-Beta Pruning, PSTs & MVV-LVA)**:
+Fail-soft/fail-hard Negamax with alpha-beta pruning, MVV-LVA move ordering, and phase-switched Piece-Square Tables searches tactical captures first while guiding positional development and endgame king activity. Lower difficulty levels respond instantaneously, while depths 5–6 typically complete within a few seconds depending on position complexity.
 3. **Save State Serialization & Validation (FEN)**:
 Adopting standard Forsyth–Edwards Notation (FEN) allows saved positions to be inspected or loaded in external tools like Lichess or Chess.com. Parsing into a temporary `Game` struct ensures malformed or illegal FEN files are rejected cleanly without corrupting an active game.
 4. **Move Validation Strategy (Copy-and-Test vs. Analytical Pin Tables)**:
@@ -185,7 +178,7 @@ Start the game:
 
 ```
 
-Run the C `perft` test suite:
+Run the C `perft` and insufficient-material test suite:
 
 ```bash
 make test
@@ -205,7 +198,7 @@ make test
 
 Requires **Dafny 4.x** (`dafny 4.11.0` tested).
 
-Verify all 36 specifications, invariants, and theorems:
+Verify all 44 specifications, invariants, and theorems:
 
 ```bash
 dafny verify dafny/chess.dfy
