@@ -1,4 +1,3 @@
-```markdown
 # Chess in C
 
 ![CI](https://github.com/zee24-2/Chess-in-C/actions/workflows/ci.yml/badge.svg)
