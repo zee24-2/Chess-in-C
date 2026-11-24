@@ -20,13 +20,12 @@
 // - IsCheckmate and IsStalemate match their formal definitions
 // - Apply updates the halfmove clock, the fullmove number and the position
 //   history exactly as the rules say (lemma ApplyUpdatesCounters)
-// - GameStatus agrees with StatusSpec: checkmate, stalemate, fifty-move
-//   draw, threefold repetition, or ongoing (in that order of priority)
+// - GameStatus agrees with StatusSpec: checkmate, stalemate,insufficient material,
+//   fifty-move draw, threefold repetition, or ongoing (in that order of priority)
 //
 // limitations (not proved):
 // - if the spec itself had a rule mistake, the proof wouldn't catch it (tested via perft)
 // - ParseFen, Perft, Play and Main are unverified test helpers
-// - insufficient material is not modeled
 // - the repetition key is (board, side to move, castling rights, en passant square),
 //   the same simplification the C engine uses. FIDE only counts the en passant
 //   square when a capture is actually possible, so in rare positions this key can
@@ -718,87 +717,137 @@ predicate FiftyMoveDraw(s: State)
   s.halfmove >= 100
 }
 
-// square color parity: even (0) or odd (1)
+// square color parity: even (0 = dark) or odd (1 = light)
 function SqColor(i: int): int { (i / 8 + i % 8) % 2 }
 
-predicate IsMinor(k: Kind) { k == Knight || k == Bishop }
-
-// spec: true iff no Pawns, Rooks, or Queens exist, and either:
-//   - at most 1 minor piece is on the board (K vs K, K+N vs K, K+B vs K), OR
-//   - there are no knights and all bishops share the same square color parity
-ghost predicate InsufficientMaterial(s: State)
+predicate AllowedInInsuffCell(c: Cell)
 {
-  // 1. No heavy pieces or pawns
-  (forall i :: 0 <= i < 64 ==>
-    match At(s.board, SqOf(i))
-    case Empty => true
-    case Occ(p) => p.kind == King || IsMinor(p.kind))
-  &&
+  match c
+  case Empty => true
+  case Occ(p) => p.kind == King || p.kind == Knight || p.kind == Bishop
+}
+
+predicate IsKnightAt(bd: seq<Cell>, i: int)
+{
+  match At(bd, SqOf(i))
+  case Occ(p) => p.kind == Knight
+  case Empty => false
+}
+
+predicate IsLightBishopAt(bd: seq<Cell>, i: int)
+{
+  SqColor(i) == 1 &&
+  match At(bd, SqOf(i))
+  case Occ(p) => p.kind == Bishop
+  case Empty => false
+}
+
+predicate IsDarkBishopAt(bd: seq<Cell>, i: int)
+{
+  SqColor(i) == 0 &&
+  match At(bd, SqOf(i))
+  case Occ(p) => p.kind == Bishop
+  case Empty => false
+}
+
+// linear prefix counters (verify in milliseconds via simple induction)
+function CountKnights(bd: seq<Cell>, n: int): nat
+  requires 0 <= n <= 64
+{
+  if n == 0 then 0
+  else CountKnights(bd, n - 1) + (if IsKnightAt(bd, n - 1) then 1 else 0)
+}
+
+function CountLightBishops(bd: seq<Cell>, n: int): nat
+  requires 0 <= n <= 64
+{
+  if n == 0 then 0
+  else CountLightBishops(bd, n - 1) + (if IsLightBishopAt(bd, n - 1) then 1 else 0)
+}
+
+function CountDarkBishops(bd: seq<Cell>, n: int): nat
+  requires 0 <= n <= 64
+{
+  if n == 0 then 0
+  else CountDarkBishops(bd, n - 1) + (if IsDarkBishopAt(bd, n - 1) then 1 else 0)
+}
+
+// spec: no Pawns, Rooks, or Queens, and either:
+//   - K vs K (0 minors), K+N vs K (1 knight, 0 bishops), K+B vs K (0 knights, 1 bishop), OR
+//   - same-colored K+B vs K+B (0 knights, and all bishops on light OR all bishops on dark squares)
+predicate InsufficientMaterial(s: State)
+{
+  var kn := CountKnights(s.board, 64);
+  var lb := CountLightBishops(s.board, 64);
+  var db := CountDarkBishops(s.board, 64);
+  (forall i :: 0 <= i < 64 ==> AllowedInInsuffCell(At(s.board, SqOf(i)))) &&
   (
-    // Case A: at most one minor piece total on the board
-    (forall i, j :: 0 <= i < j < 64 ==>
-      !(match At(s.board, SqOf(i)) { case Occ(p1) => IsMinor(p1.kind) case Empty => false } &&
-        match At(s.board, SqOf(j)) { case Occ(p2) => IsMinor(p2.kind) case Empty => false }))
-    ||
-    // Case B: zero knights, and all bishops stand on squares of identical color parity
-    ((forall i :: 0 <= i < 64 ==> At(s.board, SqOf(i)) != Occ(Piece(White, Knight)) &&
-                                  At(s.board, SqOf(i)) != Occ(Piece(Black, Knight))) &&
-     (forall i, j :: 0 <= i < 64 && 0 <= j < 64 ==>
-       (match At(s.board, SqOf(i)) { case Occ(p1) => p1.kind == Bishop case Empty => false } &&
-        match At(s.board, SqOf(j)) { case Occ(p2) => p2.kind == Bishop case Empty => false })
-       ==> SqColor(i) == SqColor(j)))
+    (kn <= 1 && lb == 0 && db == 0) ||
+    (kn == 0 && (lb == 0 || db == 0))
   )
+}
+
+// helper lemma: prefix counts are monotonic
+lemma CountsMonotonic(bd: seq<Cell>, i: int)
+  requires 0 <= i <= 64
+  ensures CountKnights(bd, i) <= CountKnights(bd, 64)
+  ensures CountLightBishops(bd, i) <= CountLightBishops(bd, 64)
+  ensures CountDarkBishops(bd, i) <= CountDarkBishops(bd, 64)
+{
+  var k := i;
+  while k < 64
+    invariant i <= k <= 64
+    invariant CountKnights(bd, i) <= CountKnights(bd, k)
+    invariant CountLightBishops(bd, i) <= CountLightBishops(bd, k)
+    invariant CountDarkBishops(bd, i) <= CountDarkBishops(bd, k)
+  {
+    k := k + 1;
+  }
 }
 
 // executable single-pass detector proved strictly equivalent to InsufficientMaterial(s)
 method IsInsufficientMaterialImpl(s: State) returns (ok: bool)
   ensures ok <==> InsufficientMaterial(s)
 {
-  var knights := 0;
-  var bishops := 0;
-  var bColor := -1;
+  var kn := 0;
+  var lb := 0;
+  var db := 0;
   var i := 0;
 
   while i < 64
     invariant 0 <= i <= 64
-    invariant knights >= 0 && bishops >= 0
-    invariant knights == 0 ==> forall j :: 0 <= j < i ==>
-      At(s.board, SqOf(j)) != Occ(Piece(White, Knight)) &&
-      At(s.board, SqOf(j)) != Occ(Piece(Black, Knight))
-    invariant bishops == 0 ==> forall j :: 0 <= j < i ==>
-      match At(s.board, SqOf(j)) { case Occ(p) => p.kind != Bishop case Empty => true }
-    invariant bishops > 0 ==> (bColor == 0 || bColor == 1) &&
-      forall j :: 0 <= j < i ==>
-        (match At(s.board, SqOf(j)) { case Occ(p) => p.kind == Bishop case Empty => false })
-        ==> SqColor(j) == bColor
-    invariant forall j :: 0 <= j < i ==>
-      match At(s.board, SqOf(j)) { case Empty => true case Occ(p) => p.kind == King || IsMinor(p.kind) }
-    invariant knights + bishops <= 1 ==>
-      forall j1, j2 :: 0 <= j1 < j2 < i ==>
-        !(match At(s.board, SqOf(j1)) { case Occ(p1) => IsMinor(p1.kind) case Empty => false } &&
-          match At(s.board, SqOf(j2)) { case Occ(p2) => IsMinor(p2.kind) case Empty => false })
-    invariant knights + bishops > 1 ==>
-      exists j1, j2 :: 0 <= j1 < j2 < i &&
-        match At(s.board, SqOf(j1)) { case Occ(p1) => IsMinor(p1.kind) case Empty => false } &&
-        match At(s.board, SqOf(j2)) { case Occ(p2) => IsMinor(p2.kind) case Empty => false }
+    invariant kn == CountKnights(s.board, i)
+    invariant lb == CountLightBishops(s.board, i)
+    invariant db == CountDarkBishops(s.board, i)
+    invariant forall j :: 0 <= j < i ==> AllowedInInsuffCell(At(s.board, SqOf(j)))
+    invariant (kn <= 1 && lb == 0 && db == 0) || (kn == 0 && (lb == 0 || db == 0))
   {
     match At(s.board, SqOf(i)) {
       case Empty =>
       case Occ(p) =>
         if p.kind == Pawn || p.kind == Rook || p.kind == Queen {
+          assert !AllowedInInsuffCell(At(s.board, SqOf(i)));
           return false;
         } else if p.kind == Knight {
-          if knights > 0 || bishops > 0 { return false; }
-          knights := knights + 1;
-        } else if p.kind == Bishop {
-          var c := SqColor(i);
-          if knights > 0 { return false; }
-          if bishops == 0 {
-            bColor := c;
-          } else if c != bColor {
+          if kn > 0 || lb > 0 || db > 0 {
+            CountsMonotonic(s.board, i + 1);
             return false;
           }
-          bishops := bishops + 1;
+          kn := kn + 1;
+        } else if p.kind == Bishop {
+          if SqColor(i) == 1 {
+            if kn > 0 || db > 0 {
+              CountsMonotonic(s.board, i + 1);
+              return false;
+            }
+            lb := lb + 1;
+          } else {
+            if kn > 0 || lb > 0 {
+              CountsMonotonic(s.board, i + 1);
+              return false;
+            }
+            db := db + 1;
+          }
         }
     }
     i := i + 1;
@@ -861,8 +910,8 @@ ghost function StatusSpec(s: State): Status
 {
   if InCheck(s.board, s.side) && (forall m :: !Legal(s, m)) then Checkmate
   else if !InCheck(s.board, s.side) && (forall m :: !Legal(s, m)) then Stalemate
-  else if FiftyMoveDraw(s) then DrawFiftyMove
   else if InsufficientMaterial(s) then DrawInsufficientMaterial
+  else if FiftyMoveDraw(s) then DrawFiftyMove
   else if ThreefoldRepetition(s) then DrawRepetition
   else Ongoing
 }
@@ -1100,4 +1149,30 @@ method Main()
   var r8 := Play(r7, "f6g8");
   var rs8 := GameStatus(r8);
   print "start position seen three times: ", rs8, "  (expected DrawRepetition)\n";
+
+  // insufficient material: K vs K, K+B vs K, K+N vs K, and same-color K+B vs K+B
+ // insufficient material: K vs K, K+B vs K, K+N vs K, and same-color K+B vs K+B
+  var im1 := ParseFen("4k3/8/8/8/8/8/8/4K3 w - - 0 1");
+  var ims1 := GameStatus(im1);
+  print "K vs K status: ", ims1, "  (expected DrawInsufficientMaterial)\n";
+
+  var im2 := ParseFen("4k3/8/8/8/8/8/8/4KB2 w - - 0 1");
+  var ims2 := GameStatus(im2);
+  print "K+B vs K status: ", ims2, "  (expected DrawInsufficientMaterial)\n";
+
+  var im3 := ParseFen("4k3/8/8/8/8/8/8/4KN2 w - - 0 1");
+  var ims3 := GameStatus(im3);
+  print "K+N vs K status: ", ims3, "  (expected DrawInsufficientMaterial)\n";
+
+  // White bishop on f1 (light square: r=0, c=5 -> 0+5=5 odd)
+  // Black bishop on c8 (light square: r=7, c=2 -> 7+2=9 odd)
+  var im4 := ParseFen("2b1k3/8/8/8/8/8/8/4KB2 w - - 0 1");
+  var ims4 := GameStatus(im4);
+  print "same-color K+B vs K+B status: ", ims4, "  (expected DrawInsufficientMaterial)\n";
+
+  // White bishop on f1 (light square: r=0, c=5 -> odd)
+  // Black bishop on f8 (dark square: r=7, c=5 -> 7+5=12 even) -> mate is still possible
+  var im5 := ParseFen("4kb2/8/8/8/8/8/8/4KB2 w - - 0 1");
+  var ims5 := GameStatus(im5);
+  print "opposite-color K+B vs K+B status: ", ims5, "  (expected Ongoing)\n";
 }

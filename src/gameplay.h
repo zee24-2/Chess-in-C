@@ -43,6 +43,7 @@ void gen_all(const Game *g, MoveList *l);
 void update_rights(Game *g, int r, int c);
 void record_position(Game *g);
 int is_threefold(const Game *g);
+int is_insufficient_material(const Game *g);
 void apply_move(Game *g, Move m);
 char piece_for(char upper, int by);
 int is_attacked(const Game *g, int r, int c, int by);
