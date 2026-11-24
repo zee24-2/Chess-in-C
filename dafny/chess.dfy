@@ -718,6 +718,94 @@ predicate FiftyMoveDraw(s: State)
   s.halfmove >= 100
 }
 
+// square color parity: even (0) or odd (1)
+function SqColor(i: int): int { (i / 8 + i % 8) % 2 }
+
+predicate IsMinor(k: Kind) { k == Knight || k == Bishop }
+
+// spec: true iff no Pawns, Rooks, or Queens exist, and either:
+//   - at most 1 minor piece is on the board (K vs K, K+N vs K, K+B vs K), OR
+//   - there are no knights and all bishops share the same square color parity
+ghost predicate InsufficientMaterial(s: State)
+{
+  // 1. No heavy pieces or pawns
+  (forall i :: 0 <= i < 64 ==>
+    match At(s.board, SqOf(i))
+    case Empty => true
+    case Occ(p) => p.kind == King || IsMinor(p.kind))
+  &&
+  (
+    // Case A: at most one minor piece total on the board
+    (forall i, j :: 0 <= i < j < 64 ==>
+      !(match At(s.board, SqOf(i)) { case Occ(p1) => IsMinor(p1.kind) case Empty => false } &&
+        match At(s.board, SqOf(j)) { case Occ(p2) => IsMinor(p2.kind) case Empty => false }))
+    ||
+    // Case B: zero knights, and all bishops stand on squares of identical color parity
+    ((forall i :: 0 <= i < 64 ==> At(s.board, SqOf(i)) != Occ(Piece(White, Knight)) &&
+                                  At(s.board, SqOf(i)) != Occ(Piece(Black, Knight))) &&
+     (forall i, j :: 0 <= i < 64 && 0 <= j < 64 ==>
+       (match At(s.board, SqOf(i)) { case Occ(p1) => p1.kind == Bishop case Empty => false } &&
+        match At(s.board, SqOf(j)) { case Occ(p2) => p2.kind == Bishop case Empty => false })
+       ==> SqColor(i) == SqColor(j)))
+  )
+}
+
+// executable single-pass detector proved strictly equivalent to InsufficientMaterial(s)
+method IsInsufficientMaterialImpl(s: State) returns (ok: bool)
+  ensures ok <==> InsufficientMaterial(s)
+{
+  var knights := 0;
+  var bishops := 0;
+  var bColor := -1;
+  var i := 0;
+
+  while i < 64
+    invariant 0 <= i <= 64
+    invariant knights >= 0 && bishops >= 0
+    invariant knights == 0 ==> forall j :: 0 <= j < i ==>
+      At(s.board, SqOf(j)) != Occ(Piece(White, Knight)) &&
+      At(s.board, SqOf(j)) != Occ(Piece(Black, Knight))
+    invariant bishops == 0 ==> forall j :: 0 <= j < i ==>
+      match At(s.board, SqOf(j)) { case Occ(p) => p.kind != Bishop case Empty => true }
+    invariant bishops > 0 ==> (bColor == 0 || bColor == 1) &&
+      forall j :: 0 <= j < i ==>
+        (match At(s.board, SqOf(j)) { case Occ(p) => p.kind == Bishop case Empty => false })
+        ==> SqColor(j) == bColor
+    invariant forall j :: 0 <= j < i ==>
+      match At(s.board, SqOf(j)) { case Empty => true case Occ(p) => p.kind == King || IsMinor(p.kind) }
+    invariant knights + bishops <= 1 ==>
+      forall j1, j2 :: 0 <= j1 < j2 < i ==>
+        !(match At(s.board, SqOf(j1)) { case Occ(p1) => IsMinor(p1.kind) case Empty => false } &&
+          match At(s.board, SqOf(j2)) { case Occ(p2) => IsMinor(p2.kind) case Empty => false })
+    invariant knights + bishops > 1 ==>
+      exists j1, j2 :: 0 <= j1 < j2 < i &&
+        match At(s.board, SqOf(j1)) { case Occ(p1) => IsMinor(p1.kind) case Empty => false } &&
+        match At(s.board, SqOf(j2)) { case Occ(p2) => IsMinor(p2.kind) case Empty => false }
+  {
+    match At(s.board, SqOf(i)) {
+      case Empty =>
+      case Occ(p) =>
+        if p.kind == Pawn || p.kind == Rook || p.kind == Queen {
+          return false;
+        } else if p.kind == Knight {
+          if knights > 0 || bishops > 0 { return false; }
+          knights := knights + 1;
+        } else if p.kind == Bishop {
+          var c := SqColor(i);
+          if knights > 0 { return false; }
+          if bishops == 0 {
+            bColor := c;
+          } else if c != bColor {
+            return false;
+          }
+          bishops := bishops + 1;
+        }
+    }
+    i := i + 1;
+  }
+  return true;
+}
+
 // threefold repetition: the current position has occurred at least 3 times.
 // the history already includes the current position, so we count it directly
 predicate ThreefoldRepetition(s: State)
@@ -765,7 +853,7 @@ method CountImpl(h: seq<Key>, k: Key) returns (n: nat)
   assert h[..|h|] == h;
 }
 
-datatype Status = Ongoing | Checkmate | Stalemate | DrawFiftyMove | DrawRepetition
+datatype Status = Ongoing | Checkmate | Stalemate | DrawInsufficientMaterial | DrawFiftyMove | DrawRepetition
 
 // spec: the status of a position. checkmate and stalemate come first (a mate
 // on the 100th ply still counts as mate), then the draw rules
@@ -774,6 +862,7 @@ ghost function StatusSpec(s: State): Status
   if InCheck(s.board, s.side) && (forall m :: !Legal(s, m)) then Checkmate
   else if !InCheck(s.board, s.side) && (forall m :: !Legal(s, m)) then Stalemate
   else if FiftyMoveDraw(s) then DrawFiftyMove
+  else if InsufficientMaterial(s) then DrawInsufficientMaterial
   else if ThreefoldRepetition(s) then DrawRepetition
   else Ongoing
 }
@@ -786,6 +875,8 @@ method GameStatus(s: State) returns (st: Status)
   if mate { return Checkmate; }
   var stale := IsStalemate(s);
   if stale { return Stalemate; }
+  var insuff := IsInsufficientMaterialImpl(s);
+  if insuff { return DrawInsufficientMaterial; }
   if s.halfmove >= 100 { return DrawFiftyMove; }
   var n := CountImpl(s.history, KeyOf(s));
   if n >= 3 { return DrawRepetition; }

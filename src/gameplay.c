@@ -49,6 +49,41 @@ int is_threefold(const Game *g) {
     return 0;
 }
 
+
+int is_insufficient_material(const Game *g) {
+    int knights = 0;
+    int bishops = 0;
+    int bishop_sq_color = -1; // 0 for dark (r+c even), 1 for light (r+c odd)
+
+    for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+            char p = g->board[r][c];
+            if (p == '.' || p == 'K' || p == 'k') continue;
+
+            char np = (char)tolower((unsigned char)p);
+            // Any pawn, rook, or queen can force mate
+            if (np == 'p' || np == 'r' || np == 'q') return 0;
+
+            if (np == 'n') {
+                knights++;
+                if (knights > 1 || bishops > 0) return 0;
+            } else if (np == 'b') {
+                int sq_col = (r + c) & 1;
+                if (bishops == 0) {
+                    bishop_sq_color = sq_col;
+                } else if (sq_col != bishop_sq_color) {
+                    return 0; // Opposite-colored bishops can theoretically mate
+                }
+                bishops++;
+                if (knights > 0) return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+
+
 void init_game(Game *g) {
     const char *start[8] = {
         "RNBQKBNR",
@@ -438,6 +473,7 @@ void play(Game *g) {
         int st = game_status(g);
         if (st == 1) { printf("Checkmate! %s wins.\n", g->side == WHITE ? "Black" : "White"); break; }
         if (st == 2) { printf("Stalemate. Draw.\n"); break; }
+        if (is_insufficient_material(g)) { printf("Draw by insufficient material.\n"); break; }
         if (g->halfmove >= 100) { printf("Draw by 50-move rule.\n"); break; }
         if (is_threefold(g)) { printf("Draw by threefold repetition.\n"); break; }
         if (in_check(g, g->side)) printf("Check!\n");
