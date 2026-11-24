@@ -7,21 +7,32 @@
 // 3. proof: dafny checks that the loop code matches the spec on every possible board.
 //
 // structure:
-// part 1: datatypes              part 5: applying a move (Apply)
-// part 2: small helpers          part 6: legality specification
-// part 3: board geometry         part 7: loop implementation + proofs
-// part 4: attack & check rules   part 8: move generator, theorems, and perft tests
+// part 1: datatypes              part 6: legality specification
+// part 2: small helpers          part 7: loop implementation + proofs
+// part 3: board geometry         part 8: move generator and theorems
+// part 4: attack & check rules   part 9: draw rules, move counters, game status
+// part 5: applying a move        part 10: perft and game tests (unverified)
 //
 // what is proved:
 // - IsLegalImpl agrees with Legal on every input
 // - GenLegal returns the exact set of legal moves (soundness + completeness)
 // - a legal move never leaves your own king in check
 // - IsCheckmate and IsStalemate match their formal definitions
+// - Apply updates the halfmove clock, the fullmove number and the position
+//   history exactly as the rules say (lemma ApplyUpdatesCounters)
+// - GameStatus agrees with StatusSpec: checkmate, stalemate, fifty-move
+//   draw, threefold repetition, or ongoing (in that order of priority)
 //
 // limitations (not proved):
 // - if the spec itself had a rule mistake, the proof wouldn't catch it (tested via perft)
-// - ParseFen, Perft, and Main are unverified test helpers
-// - 50-move rule, threefold repetition, and insufficient material aren't modeled here
+// - ParseFen, Perft, Play and Main are unverified test helpers
+// - insufficient material is not modeled
+// - the repetition key is (board, side to move, castling rights, en passant square),
+//   the same simplification the C engine uses. FIDE only counts the en passant
+//   square when a capture is actually possible, so in rare positions this key can
+//   count a repetition slightly later than the official rules
+// - the draw is automatic here; in official chess the fifty-move and threefold
+//   draws are claimed by a player (the 75-move and fivefold rules are automatic)
 
 
 // --- PART 1: DATA TYPES ---
@@ -47,9 +58,24 @@ datatype Move = Move(src: Square, dst: Square, promo: Option<Kind>)
 // castling rights: wk, wq, bk, bq
 datatype Rights = Rights(wk: bool, wq: bool, bk: bool, bq: bool)
 
+// the part of a position that matters for repetition: two positions with the
+// same Key are "the same position". move counters and history are NOT part of it
+datatype Key = Key(board: seq<Cell>, side: Color, rights: Rights, ep: Option<Square>)
+
 // full game state:
 // board is an immutable 64-element sequence indexed by r*8 + c
-datatype State = State(board: seq<Cell>, side: Color, rights: Rights, ep: Option<Square>)
+// halfmove: plies since the last pawn move or capture (the fifty-move clock)
+// fullmove: the move number, starts at 1 and goes up after Black moves
+// history: the Key of every position that has occurred in the game, in order,
+//          INCLUDING the current position (same idea as history[] in the C code)
+datatype State = State(board: seq<Cell>, side: Color, rights: Rights, ep: Option<Square>,
+                       halfmove: int, fullmove: int, history: seq<Key>)
+
+// the repetition key of a state
+function KeyOf(s: State): Key
+{
+  Key(s.board, s.side, s.rights, s.ep)
+}
 
 
 // --- PART 2: SMALL HELPERS ---
@@ -186,6 +212,10 @@ function ClearRights(rt: Rights, s: Square): Rights
 }
 
 // returns the new state after playing move m (handles en passant, castling, promotion)
+// it also updates the three bookkeeping fields:
+//   halfmove: reset to 0 on a pawn move or a capture, otherwise +1
+//   fullmove: +1 after Black moves
+//   history:  the old history with the Key of the new position added at the end
 function Apply(s: State, m: Move): State
 {
   match At(s.board, m.src)
@@ -195,6 +225,8 @@ function Apply(s: State, m: Move): State
     var isEp := p.kind == Pawn && m.src.c != m.dst.c && At(s.board, m.dst) == Empty;
     // castling: king moves two files
     var isCastle := p.kind == King && Abs(m.dst.c - m.src.c) == 2;
+    // a capture removes a piece: either one stands on the destination, or it is en passant
+    var isCapture := At(s.board, m.dst) != Empty || isEp;
     // if promoting, swap the pawn for the promoted piece
     var placed := match m.promo
                   case Some(k) => Occ(Piece(p.color, k))
@@ -213,8 +245,12 @@ function Apply(s: State, m: Move): State
       if p.kind == Pawn && Abs(m.dst.r - m.src.r) == 2
       then Some(Sq((m.src.r + m.dst.r) / 2, m.src.c))
       else None;
-    State(b3, Opp(s.side),
-          ClearRights(ClearRights(s.rights, m.src), m.dst), newEp)
+    var newRights := ClearRights(ClearRights(s.rights, m.src), m.dst);
+    var newSide := Opp(s.side);
+    var newHalf := if p.kind == Pawn || isCapture then 0 else s.halfmove + 1;
+    var newFull := if s.side == Black then s.fullmove + 1 else s.fullmove;
+    var newKey := Key(b3, newSide, newRights, newEp);
+    State(b3, newSide, newRights, newEp, newHalf, newFull, s.history + [newKey])
 }
 
 
@@ -494,7 +530,7 @@ method IsLegalImpl(s: State, m: Move) returns (ok: bool)
 }
 
 
-// --- PART 8: MOVE GENERATOR, THEOREMS, AND PERFT TESTS ---
+// --- PART 8: MOVE GENERATOR AND THEOREMS ---
 
 const PromoOpts: seq<Option<Kind>> :=
   [None, Some(Knight), Some(Bishop), Some(Rook), Some(Queen)]
@@ -665,7 +701,99 @@ lemma LegalMovePassesTurn(s: State, m: Move)
 }
 
 
-// --- RUNNABLE PERFT & ENDGAME TESTS (UNVERIFIED) ---
+// --- PART 9: DRAW RULES, MOVE COUNTERS, GAME STATUS ---
+
+// how many times the key k appears in the list h.
+// defined recursively: look at the last element, then at everything before it
+function Count(h: seq<Key>, k: Key): nat
+  decreases |h|
+{
+  if |h| == 0 then 0
+  else Count(h[..|h| - 1], k) + (if h[|h| - 1] == k then 1 else 0)
+}
+
+// fifty-move rule: 100 plies (50 moves by each side) with no pawn move and no capture
+predicate FiftyMoveDraw(s: State)
+{
+  s.halfmove >= 100
+}
+
+// threefold repetition: the current position has occurred at least 3 times.
+// the history already includes the current position, so we count it directly
+predicate ThreefoldRepetition(s: State)
+{
+  Count(s.history, KeyOf(s)) >= 3
+}
+
+// a pawn move or a capture: exactly the moves that reset the fifty-move clock.
+// (en passant is a pawn move, so it is covered by the pawn case)
+predicate ResetsClock(s: State, m: Move)
+{
+  match At(s.board, m.src)
+  case Empty => false
+  case Occ(p) => p.kind == Pawn || At(s.board, m.dst) != Empty
+}
+
+// proves Apply keeps the counters and history exactly as the rules say
+lemma ApplyUpdatesCounters(s: State, m: Move)
+  requires Legal(s, m)
+  ensures Apply(s, m).halfmove == (if ResetsClock(s, m) then 0 else s.halfmove + 1)
+  ensures Apply(s, m).fullmove == (if s.side == Black then s.fullmove + 1 else s.fullmove)
+  ensures |Apply(s, m).history| == |s.history| + 1
+  ensures Apply(s, m).history[..|s.history|] == s.history
+  ensures Apply(s, m).history[|s.history|] == KeyOf(Apply(s, m))
+{
+  assert PseudoLegal(s, m);
+}
+
+// executable counting, proved equal to the recursive definition
+method CountImpl(h: seq<Key>, k: Key) returns (n: nat)
+  ensures n == Count(h, k)
+{
+  n := 0;
+  var i := 0;
+  while i < |h|
+    invariant 0 <= i <= |h|
+    invariant n == Count(h[..i], k)
+  {
+    // dropping the last element of the prefix h[..i+1] gives the prefix h[..i]
+    assert h[..i + 1][..i] == h[..i];
+    assert h[..i + 1][i] == h[i];
+    if h[i] == k { n := n + 1; }
+    i := i + 1;
+  }
+  assert h[..|h|] == h;
+}
+
+datatype Status = Ongoing | Checkmate | Stalemate | DrawFiftyMove | DrawRepetition
+
+// spec: the status of a position. checkmate and stalemate come first (a mate
+// on the 100th ply still counts as mate), then the draw rules
+ghost function StatusSpec(s: State): Status
+{
+  if InCheck(s.board, s.side) && (forall m :: !Legal(s, m)) then Checkmate
+  else if !InCheck(s.board, s.side) && (forall m :: !Legal(s, m)) then Stalemate
+  else if FiftyMoveDraw(s) then DrawFiftyMove
+  else if ThreefoldRepetition(s) then DrawRepetition
+  else Ongoing
+}
+
+// executable status check, proved equal to StatusSpec
+method GameStatus(s: State) returns (st: Status)
+  ensures st == StatusSpec(s)
+{
+  var mate := IsCheckmate(s);
+  if mate { return Checkmate; }
+  var stale := IsStalemate(s);
+  if stale { return Stalemate; }
+  if s.halfmove >= 100 { return DrawFiftyMove; }
+  var n := CountImpl(s.history, KeyOf(s));
+  if n >= 3 { return DrawRepetition; }
+  return Ongoing;
+}
+
+
+// --- PART 10: RUNNABLE PERFT & GAME TESTS (UNVERIFIED) ---
 
 function BackKind(c: int): Kind
 {
@@ -687,11 +815,12 @@ function StartCell(i: int): Cell
   else Empty
 }
 
-// initializes the starting board, only ran once
+// the starting position: halfmove 0, fullmove 1, history holds just this position
 function StartState(): State
 {
-  State(seq(64, i requires 0 <= i < 64 => StartCell(i)),
-        White, Rights(true, true, true, true), None)
+  var b := seq(64, i requires 0 <= i < 64 => StartCell(i));
+  var r := Rights(true, true, true, true);
+  State(b, White, r, None, 0, 1, [Key(b, White, r, None)])
 }
 
 // counts leaf nodes at 'depth' to cross-check move generation against known perft numbers
@@ -724,7 +853,25 @@ function CharToCell(ch: char): Cell
   case _ => Empty
 }
 
+// reads a run of digits starting at index start; returns the number and the
+// index of the first character after the digits
+method ParseNat(fen: string, start: int) returns (n: int, next: int)
+  requires 0 <= start
+  ensures start <= next
+{
+  n := 0;
+  var i := start;
+  while i < |fen| && '0' <= fen[i] <= '9'
+    invariant start <= i
+  {
+    n := n * 10 + ((fen[i] as int) - ('0' as int));
+    i := i + 1;
+  }
+  return n, i;
+}
+
 // parses a FEN string into a State (mirrors fen_to_game in file_handling.c)
+// fen fields: placement, side, castling, en passant, halfmove clock, fullmove number
 method ParseFen(fen: string) returns (s: State)
 {
   var board: seq<Cell> := seq(64, i => Empty);
@@ -764,13 +911,36 @@ method ParseFen(fen: string) returns (s: State)
     else if fen[i] == 'q' { rights := rights.(bq := true); }
     i := i + 1;
   }
-  // en passant square
+  // en passant square: a square like e3, or '-' for none
   i := i + 1;
   var ep: Option<Square> := None;
   if i + 1 < |fen| && 'a' <= fen[i] <= 'h' {
     ep := Some(Sq((fen[i + 1] as int) - ('1' as int), (fen[i] as int) - ('a' as int)));
+    i := i + 2;
+  } else {
+    i := i + 1;
   }
-  return State(board, side, rights, ep);
+  // halfmove clock, then fullmove number (defaults 0 and 1 if missing)
+  i := i + 1;
+  var half: int;
+  half, i := ParseNat(fen, i);
+  i := i + 1;
+  var full: int;
+  full, i := ParseNat(fen, i);
+  if full == 0 { full := 1; }
+  var raw := State(board, side, rights, ep, half, full, []);
+  return raw.(history := [KeyOf(raw)]);
+}
+
+// plays a move written like "g1f3" (no promotion); prints a warning if it is illegal
+method Play(s: State, mv: string) returns (t: State)
+  requires |mv| == 4
+{
+  var m := Move(Sq((mv[1] as int) - ('1' as int), (mv[0] as int) - ('a' as int)),
+                Sq((mv[3] as int) - ('1' as int), (mv[2] as int) - ('a' as int)), None);
+  var ok := IsLegalImpl(s, m);
+  if !ok { print "WARNING: illegal move ", mv, "\n"; }
+  return Apply(s, m);
 }
 
 method PerftFen(name: string, fen: string, maxDepth: nat, expected: seq<nat>)
@@ -805,4 +975,38 @@ method Main()
   print "queen+king vs king, Black to move, stalemate? ", m2, "  (expected true)\n";
   var m3 := IsCheckmate(StartState());
   print "start position, checkmate? ", m3, "  (expected false)\n";
+
+  // move counters: halfmove clock and fullmove number
+  var t0 := StartState();
+  var t1 := Play(t0, "e2e4");
+  print "after e2e4: halfmove ", t1.halfmove, ", fullmove ", t1.fullmove, "  (expected 0, 1)\n";
+  var t2 := Play(t1, "e7e5");
+  print "after e7e5: halfmove ", t2.halfmove, ", fullmove ", t2.fullmove, "  (expected 0, 2)\n";
+  var t3 := Play(t2, "g1f3");
+  print "after g1f3: halfmove ", t3.halfmove, ", fullmove ", t3.fullmove, "  (expected 1, 2)\n";
+  var t4 := Play(t3, "b8c6");
+  print "after b8c6: halfmove ", t4.halfmove, ", fullmove ", t4.fullmove, "  (expected 2, 3)\n";
+
+  // fifty-move rule: a rook move that is not a pawn move or capture takes 99 to 100
+  var f0 := ParseFen("4k3/8/8/8/8/8/8/R3K3 w Q - 99 50");
+  var fs0 := GameStatus(f0);
+  print "halfmove 99 status: ", fs0, "  (expected Ongoing)\n";
+  var f1 := Play(f0, "a1a2");
+  var fs1 := GameStatus(f1);
+  print "after a1a2 halfmove ", f1.halfmove, " status: ", fs1, "  (expected 100, DrawFiftyMove)\n";
+
+  // threefold repetition: both sides shuffle a knight out and back, twice
+  var r0 := StartState();
+  var r1 := Play(r0, "g1f3");
+  var r2 := Play(r1, "g8f6");
+  var r3 := Play(r2, "f3g1");
+  var r4 := Play(r3, "f6g8");
+  var rs4 := GameStatus(r4);
+  print "start position seen twice: ", rs4, "  (expected Ongoing)\n";
+  var r5 := Play(r4, "g1f3");
+  var r6 := Play(r5, "g8f6");
+  var r7 := Play(r6, "f3g1");
+  var r8 := Play(r7, "f6g8");
+  var rs8 := GameStatus(r8);
+  print "start position seen three times: ", rs8, "  (expected DrawRepetition)\n";
 }

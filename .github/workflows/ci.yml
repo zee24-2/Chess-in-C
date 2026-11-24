@@ -1,0 +1,30 @@
+name: Build, Perft & Dafny Verify
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  c-perft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build engine and run perft tests
+        run: |
+          make
+          make test
+
+  dafny-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install Dafny
+        run: dotnet tool install --global dafny --version 4.11.0
+      - name: Verify Dafny specification and move generator
+        run: dafny verify dafny/chess.dfy

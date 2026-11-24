@@ -1,109 +1,162 @@
+Here is the updated `README.md`. It keeps your exact structure and detailed breakdown while incorporating every fix:
+
+* Removes the empty `Video Demo:` line and adds a top summary, terminal preview, and **Quick Start** section.
+* Adds a clear **"What Is and Isn't Verified"** section explaining that Dafny verifies the specification compliance (not chess itself or the C files), and accurately documents that `chess.dfy` now proves 36 obligations including the 50-move rule, threefold repetition, and move counters (leaving out only insufficient material).
+* Softens the depth 5–6 speed claim so it isn't overstated.
+* Updates file paths (`src/`, `dafny/`, `tests/`), documents `make test` (C `perft` cross-validation), and adds the GitHub Actions CI badge.
+
+```markdown
 # Chess in C
 
-#### Video Demo:
+![CI](https://github.com/zee24-2/Chess-in-C/actions/workflows/ci.yml/badge.svg)
 
-#### Description:
+A command-line chess engine and game written from scratch in C99, featuring local two-player mode, an alpha-beta Negamax AI opponent across five difficulty levels, FEN persistence, and an independent formal specification and verified move/draw-rule implementation in Dafny.
 
-**Chess in C** is a full-featured command-line chess engine and game implemented in C, accompanied by a **formally verified move validator and move generator in Dafny**. It supports both **two-player local matches** and **single-player games against an AI opponent** across five difficulty levels. The goal of this project was to construct a robust, self-contained chess engine and interactive console interface from scratch, adhering strictly to the official rules of international chess (FIDE standards), and to mathematically prove the correctness of the underlying chess rules using automated theorem proving.
+```text
+8  r n b q k b n r
+7  p p p p p p p p
+6  . . . . . . . .
+5  . . . . . . . .
+4  . . . . P . . .
+3  . . . . . . . .
+2  P P P P . P P P
+1  R N B Q K B N R
 
-The C engine incorporates complete move validation, state tracking, check and checkmate detection, stalemate recognition, the fifty-move and threefold repetition draw rules, pawn promotions, castling, en passant, and game persistence through standard Forsyth–Edwards Notation (FEN). Core functionality is segmented into dedicated modules for move generation, game mechanics, AI search and evaluation, FEN serialization, and safe file/input parsing.
+   a b c d e f g h
+
+Computer played e7e5  (14,230 positions searched)
+White to move (e.g. e2e4, 'save f', 'load f', 'quit'):
+
+```
+
+### Quick Start
+
+```bash
+# Build and launch the C engine
+make
+./chess
+
+# Run the C perft move-generation test suite
+make test
+
+# Verify all 36 proofs in Dafny (requires Dafny 4.11+)
+dafny verify dafny/chess.dfy
+
+```
+
+---
+
+### Description
+
+**Chess in C** is a modular, zero-dependency C99 chess engine and interactive terminal game adhering to standard international chess rules. It supports local two-player matches (auto-flipping the board each turn) and single-player games against a Negamax AI opponent, incorporating full move validation, check/checkmate/stalemate detection, the fifty-move and threefold repetition draw rules, pawn promotion, castling, en passant, and Forsyth–Edwards Notation (FEN) save/load support.
+
+Alongside the C codebase, `dafny/chess.dfy` provides a standalone formal specification and verified implementation of the core move rules, draw rules, move counters, and game-status logic in Dafny 4.11 (36 proofs, 0 errors). Both the C engine (`make test`) and the Dafny generator (`dafny run dafny/chess.dfy`) produce identical `perft` node counts across standard Chess Programming Wiki benchmark positions (`start`: 20 / 400 / 8,902; `kiwipete`: 48 / 2,039 / 97,862).
+
+---
+
+### What Is and Isn't Verified
+
+The Dafny file (`dafny/chess.dfy`) serves as a formal methods companion to the C engine. To be precise about what is proved:
+
+* **Proof of specification compliance, not chess itself:** Dafny proves that the loop-based implementations (`IsLegalImpl`, `GenLegal`, `CountImpl`, `GameStatus`) strictly agree with the declarative logic specifications (`Legal`, `Count`, `StatusSpec`) across all possible board states and moves. That proves the implementation matches *this* specification—not that the specification itself is free of rule mistakes (which is why both engines are tested against published `perft` counts and endgame/draw scenarios).
+* **Separate implementation, not C verification:** `dafny/chess.dfy` is an independent implementation written in Dafny, not a formal proof of the C source files in `src/`. Having two independently written implementations produce identical `perft` counts provides strong cross-validation.
+* **Modeled vs. unmodeled rules in Dafny:** `dafny/chess.dfy` models core piece movement, pins/check, castling, en passant, promotion, checkmate, stalemate, the fifty-move rule, threefold repetition, and halfmove/fullmove counters—covering the ruleset of the C engine except draws by insufficient material (e.g., King vs. King or King + Bishop vs. King).
+* **Draw claiming & en passant repetition keys:** Both the C and Dafny implementations treat fifty-move and threefold repetition draws as automatic once reached (rather than requiring a player claim), and include the en passant target square unconditionally in repetition keys (which can occasionally detect a repetition one move later than strict FIDE rules when no en passant capture is actually legal).
+* **Unverified test harnesses:** `ParseFen`, `Perft`, and `Main` inside `dafny/chess.dfy` are executable test helpers and are not formally proved.
 
 ---
 
 ### File Overview and Implementation Details
 
-The codebase comprises seven primary C source and header files, a `Makefile`, and a Dafny formal verification module (`chess.dfy`):
+The repository is organized into `src/`, `dafny/`, and `tests/`, accompanied by a `Makefile` and GitHub Actions CI workflow:
 
-#### 1. `chess.c`
+#### 1. `src/chess.c`
 
-This file serves as the main entry point for the executable. Intentionally minimal, it contains only the `main` function. It allocates the top-level `Game` structure, calls `init_game(&g)` to configure the starting board and initial state, and delegates control to the interactive game loop by calling `play(&g)`. Keeping the main driver lean ensures complete decoupling between program lifecycle management and the internal game mechanics.
+The main entry point for the executable. Intentionally minimal, it contains only the `main` function, allocating the top-level `Game` struct, calling `init_game(&g)` to configure the starting position, and delegating control to `play(&g)`.
 
-#### 2. `gameplay.h`
+#### 2. `src/gameplay.h`
 
-The primary header file defines all foundational data types, constants, and function prototypes governing chess logic:
+Defines foundational data types, constants, and function prototypes governing chess logic:
 
-* **Constants and Macros**: Defines player turn identifiers (`WHITE = 0`, `BLACK = 1`), maximum move capacity (`MAX_MOVES = 256`), maximum position history (`MAX_HISTORY = 1024`), and the boundary verification macro `IN(r, c)` ensuring array indices remain within `0` and `7`.
-* **`Game` struct**: Encapsulates the entire chess match state:
-* `board[8][8]`: A two-dimensional character array representing the 64 squares.
-* `side`: An integer tracking whether it is White's or Black's turn.
-* `castle`: A bitmask tracking castling permissions (1 for White Kingside, 2 for White Queenside, 4 for Black Kingside, 8 for Black Queenside).
-* `ep_r`, `ep_c`: Coordinates of the active en passant target square (set to -1 if inactive).
-* `halfmove`: Counter for the fifty-move clock, tracking plies since the last pawn advance or piece capture.
-* `fullmove`: Number of full turns completed in the match (incremented after Black moves).
-* `history[MAX_HISTORY][72]` and `history_count`: Stores compact position keys (board layout, active side, castling rights, and en passant square) to detect threefold repetition draws.
+* **Constants and Macros**: Defines turn identifiers (`WHITE = 0`, `BLACK = 1`), move list capacity (`MAX_MOVES = 256`), position history capacity (`MAX_HISTORY = 1024`), and the bounds macro `IN(r, c)`.
+* **`Game` struct**: Encapsulates the match state:
+* `board[8][8]`: Two-dimensional character array representing the 64 squares.
+* `side`: Active player (`WHITE` or `BLACK`).
+* `castle`: Bitmask tracking castling rights (`1` = White Kingside, `2` = White Queenside, `4` = Black Kingside, `8` = Black Queenside).
+* `ep_r`, `ep_c`: Coordinates of the active en passant target square (`-1` if inactive).
+* `halfmove`: Halfmove clock tracking plies since the last pawn push or capture.
+* `fullmove`: Fullmove counter incremented after Black's turn.
+* `history[MAX_HISTORY][72]` and `history_count`: Compact position keys (board, active side, castling rights, and en passant square) used to detect threefold repetition draws.
 
 
-* **`Move` and `MoveList` structs**: Define individual move records containing source coordinates (`fr`, `fc`), destination coordinates (`tr`, `tc`), and an optional pawn promotion character (`promo`). `MoveList` maintains a fixed-size buffer of `Move` records and an active count.
-* **Prototypes**: Declares routines for board setup, terminal rendering, move generation, attack detection, king safety verification, repetition tracking, move execution, and the primary gameplay loop.
+* **`Move` and `MoveList` structs**: Store source coordinates (`fr`, `fc`), destination coordinates (`tr`, `tc`), and an optional promotion character (`promo`).
 
-#### 3. `gameplay.c`
+#### 3. `src/gameplay.c`
 
-The heart of the chess engine, implementing board operations, rule enforcement, and the interactive user interface:
+Implements board operations, rule enforcement, and the interactive terminal interface:
 
-* **Board Display and Safe Input Parsing**: `init_game` sets up the standard layout using uppercase characters for White pieces (`P`, `N`, `B`, `R`, `Q`, `K`) and lowercase for Black (`p`, `n`, `b`, `r`, `q`, `k`), with empty squares marked as dots (`.`). `print_board` renders the current board state oriented from either White's or Black's perspective. `ask_choice` and `play` use bounded line-based reading (`fgets` and `strtol`) to prevent buffer overflows and leftover newline bugs, while `parse_move` validates and converts coordinate strings like `e2e4` or `e7e8q` into zero-indexed numeric coordinates.
+* **Board Display and Safe Input Parsing**: `init_game` initializes the standard layout (`P`, `N`, `B`, `R`, `Q`, `K` for White; lowercase for Black; `.` for empty squares). `print_board` renders the 8x8 board oriented to the active or human player. `ask_choice` and `play` use bounded line-buffered reading (`fgets` and `strtol`) to prevent buffer overflows and leftover newline bugs, while `parse_move` validates coordinate strings (`e2e4`, `e7e8q`).
 * **Move Generation**:
-* `gen_jumper`: Generates pseudo-legal moves for fixed-offset leaping pieces (knights and kings) using directional delta tables (`KN_DR`, `KN_DC`, `KG_DR`, `KG_DC`).
-* `gen_slider`: Traces straight rays for sliding pieces (rooks along orthogonals, bishops along diagonals, and queens along both) until reaching the board edge or encountering an obstacle.
-* `gen_pawn`: Manages pawn mechanics, including single-square advances, two-square initial leaps, diagonal captures, promotion handling across all four promotion options (queen, rook, bishop, knight), and en passant captures based on target square tracking.
-* `gen_castle`: Checks castling eligibility for kingside and queenside, verifying that the king and rook have not moved, intervening squares are empty, and neither the king's initial square, transit squares, nor destination squares are under enemy attack.
+* `gen_jumper`: Generates pseudo-legal moves for knights and kings using offset tables (`KN_DR`, `KN_DC`, `KG_DR`, `KG_DC`).
+* `gen_slider`: Traces rays along orthogonals and diagonals for rooks, bishops, and queens until hitting the board edge or an occupied square.
+* `gen_pawn`: Handles single advances, double pushes from the starting rank, diagonal captures, all four promotion choices (`q`, `r`, `b`, `n`), and en passant captures.
+* `gen_castle`: Verifies castling rights, unmoved king/rook placement, empty intervening squares, and that the king is not in check, crossing check, or landing in check.
 
 
-* **Threat Detection and King Safety**:
-* `is_attacked`: Determines if a given target square is attacked by a designated opposing color by casting reverse rays and jump checks from the target square.
-* `in_check`: Locates the specified player's king on the board and tests whether its position is under attack.
+* **King Safety, Draw Rules, and Status Verification**:
+* `is_attacked` and `in_check`: Detect square attacks via reverse ray/jump checks and test whether the active king is under attack.
+* `gen_legal`: Filters pseudo-legal moves by applying each candidate to a copied state (`Game copy = *g`) and discarding moves that leave the moving side's king in check before appending legal castling moves.
+* `game_status` and `is_threefold`: Evaluate terminal states after every move (and immediately on FEN load), checking checkmate/stalemate before fifty-move (`halfmove >= 100`) and threefold repetition draws.
+* `apply_move`: Updates board squares, handles promotions, revokes spent castling rights, sets/clears en passant targets, updates move clocks, switches turns, and appends the position key to `history`.
 
 
-* **Legality, Draw Rules, and Status Verification**:
-* `gen_legal`: Generates all pseudo-legal candidate moves, applies each speculatively to a copied game state, and discards any move that leaves the moving player's king in check before appending legal castling moves.
-* `game_status` and `is_threefold`: Evaluates terminal game states after every turn (including immediately after loading a FEN file), detecting checkmate, stalemate, the fifty-move rule (`halfmove >= 100`), and threefold repetition (`is_threefold`).
-* `apply_move`: Executes verified moves by updating board squares, handling pawn promotions, adjusting castling rights when rooks or kings move or get captured, updating en passant targets, maintaining move counters, alternating active sides, and recording the resulting position in `history`.
+* **Interactive Loop (`play`)**: Supports **Play a friend** (auto-flipping the board each turn) and **Play the computer** (depths 2–6, playing as White, Black, or Random).
 
-
-* **Game Setup and Interactive Loop (`play`)**: Lets the user choose between **Play a friend** (auto-flipping the board each turn) or **Play the computer** (choosing from 5 difficulty levels corresponding to search depths 2 through 6, and playing as White, Black, or Random).
-
-#### 4. `ai.h` & `ai.c`
+#### 4. `src/ai.h` & `src/ai.c`
 
 Implements the computer opponent using a minimax search engine:
 
-* **Static Board Evaluation (`static_eval`)**: Evaluates material balance using standard centipawn weights (Pawn = 100, Knight = 300, Bishop = 300, Rook = 500, Queen = 900) alongside positional bonuses (+50 centipawns) for central control by pawns, knights, and bishops.
-* **Move Ordering (`move_value`, `order`)**: Uses insertion sort with Most Valuable Victim – Least Valuable Attacker (MVV-LVA) heuristics, en passant bonuses, and promotion bonuses to prioritize promising captures first and maximize alpha-beta pruning efficiency.
-* **Negamax Search with Alpha-Beta Pruning (`negamax`, `best_move`)**: Recursively explores the game tree up to the selected difficulty depth (`depth` 2–6), recognizing checkmate distances (`-MATE + ply`), stalemate, fifty-move draws, and threefold repetition draws during search.
+* **Static Board Evaluation (`static_eval`)**: Scores material balance (`Pawn = 100`, `Knight = 300`, `Bishop = 300`, `Rook = 500`, `Queen = 900`) plus positional bonuses for central control by pawns, knights, and bishops.
+* **Move Ordering (`move_value`, `order`)**: Uses insertion sort with Most Valuable Victim – Least Valuable Attacker (MVV-LVA) scoring, en passant bonuses, and promotion bonuses to search strong captures first and maximize alpha-beta cutoffs.
+* **Negamax Search with Alpha-Beta Pruning (`negamax`, `best_move`)**: Recursively searches the game tree up to the chosen depth (`2`–`6`), scoring checkmate distances (`-MATE + ply`) and detecting stalemate, fifty-move, and repetition draws inside the search tree.
 
-#### 5. `file_handling.h` & `file_handling.c`
+#### 5. `src/file_handling.h` & `src/file_handling.c`
 
-Implements FEN serialization, strict validation, and disk persistence:
+Implements FEN serialization, validation, and disk persistence:
 
-* `game_to_fen`: Encodes the board rank-by-rank from row 8 down to row 1, collapsing consecutive empty squares into digit counts, appending side to move (`w`/`b`), castling availability flags (`KQkq` or `-`), en passant coordinates (`a3` through `h6` or `-`), and halfmove/fullmove numbers.
-* `fen_to_game`: Safely parses and validates incoming FEN strings before modifying the active `Game` state. It rejects malformed rank lengths, invalid piece characters, pawns placed on the 1st or 8th ranks, missing or duplicate kings, invalid castling/en passant fields, negative move clocks, trailing garbage, and illegal positions where the non-moving side is already in check.
-* `save_game` and `open_game`: Provide safe disk persistence using bounded `fgets` reading and formatted FEN writing so matches can be saved and resumed cleanly—even if the loaded FEN is already in check, checkmate, or stalemate.
+* `game_to_fen`: Encodes board ranks, active side, castling flags, en passant square, and halfmove/fullmove counters into standard FEN format.
+* `fen_to_game`: Parses into a temporary `Game` struct and validates rank lengths, piece characters, pawns on the 1st/8th ranks, king counts, castling/en passant syntax, non-negative move counters, trailing tokens, and check legality before committing to the active game.
+* `save_game` and `open_game`: Read and write FEN files safely with bounded `fgets` I/O.
 
-#### 6. `chess.dfy` (Formal Verification in Dafny)
+#### 6. `dafny/chess.dfy` (Formal Verification in Dafny)
 
-A formal specification and verified implementation of the core chess rulebook written in **Dafny (v4.11)**, mirroring the state model and rule semantics of the C engine:
+A formal specification and verified implementation of the core chess rules, draw rules, and move counters written in **Dafny 4.11** (36 proofs, 0 errors):
 
-* **Declarative Logic Specification**: Defines chess geometry (`PathClear`), attack rules (`PieceAttacks`, `IsAttacked`, `InCheck`), state transitions (`Apply`), special moves (`CastleOK`, `PawnRule`, `PromoOk`), and move legality (`PseudoLegal`, `Legal`) using first-order quantifiers (`forall`, `exists`).
-* **Verified Loop Implementations**: Implements executable loop-based routines (`PathClearImpl`, `AttacksImpl`, `IsAttackedImpl`, `InCheckImpl`, `IsLegalImpl`) equipped with loop invariants and postconditions (`ensures ok <==> Legal(s, m)`), discharging proofs via Z3 across all possible board states and moves.
-* **Soundness & Completeness Proofs (`GenLegal`)**: Proves mathematically that `GenLegal` returns *only* legal moves (soundness) and misses *no* legal moves (completeness), alongside safety lemmas (`LegalNeverLeavesKingInCheck`, `ApplyKeepsBoardSize`, `LegalMovePassesTurn`) and verified `IsCheckmate` / `IsStalemate` predicates.
-* **Perft Cross-Validation (`Main`)**: Includes an unverified FEN parser and `Perft` runner that validates the verified generator's leaf node counts against standard Chess Programming Wiki benchmarks (`start`, `kiwipete`, `position3`, `position4`, `position5`) as well as checkmate and stalemate edge cases.
+* **Declarative Logic Specification**: Defines chess geometry (`PathClear`), attack rules (`PieceAttacks`, `IsAttacked`, `InCheck`), state transitions (`Apply`), special moves (`CastleOK`, `PawnRule`, `PromoOk`), move legality (`PseudoLegal`, `Legal`), and draw conditions (`FiftyMoveDraw`, `ThreefoldRepetition`, `StatusSpec`).
+* **Verified Loop Implementations**: Proves executable loop-based routines (`PathClearImpl`, `AttacksImpl`, `IsAttackedImpl`, `InCheckImpl`, `IsLegalImpl`, `CountImpl`, `GameStatus`) equivalent to their specifications via loop invariants and Z3 theorem proving.
+* **Soundness, Completeness & Counter Theorems**: Proves `GenLegal` returns *only* legal moves (soundness) and misses *no* legal moves (completeness), alongside `ApplyUpdatesCounters` (verifying halfmove, fullmove, and history updates on every legal move), `LegalNeverLeavesKingInCheck`, `ApplyKeepsBoardSize`, and `LegalMovePassesTurn`.
+* **Perft & Draw Cross-Validation (`Main`)**: Includes an unverified FEN parser and `Perft` runner verifying standard benchmark counts alongside checkmate, stalemate, fifty-move draw, and threefold repetition test cases.
+
+#### 7. `tests/perft.c` & `Makefile`
+
+Automates compilation (`make`) and runs `perft` benchmarks (`make test`) to confirm that the C move generator matches `dafny/chess.dfy` and published Chess Programming Wiki node counts.
 
 ---
 
 ### Design Decisions and Technical Trade-offs
 
-During development, several architectural choices and trade-offs were evaluated:
-
 1. **Board Representation (2D Char Array vs. Bitboards)**:
-A 64-bit integer bitboard architecture is standard in high-performance competitive chess engines. However, for a readable, self-contained terminal chess game in C, clarity, ease of debugging, and maintainability were prioritized. An 8x8 two-dimensional character array (`char board[8][8]`) maps directly to ranks and files, making terminal rendering straightforward and move transformations intuitive without requiring bitwise manipulation for board layout.
+While 64-bit bitboards are standard in high-speed competitive engines, an 8x8 two-dimensional character array (`char board[8][8]`) maps directly to ranks and files, keeping terminal rendering straightforward and move logic readable and easy to debug.
 2. **AI Search Algorithm (Negamax with Alpha-Beta Pruning & MVV-LVA)**:
-Instead of a plain minimax search, the AI uses a Negamax formulation with alpha-beta pruning and MVV-LVA move ordering. Searching captures and promotions first significantly narrows the branching factor, allowing the engine to reach depth 5–6 in pure C within a couple of seconds without needing transposition tables.
-3. **Save State Serialization & Strict Validation (FEN)**:
-Rather than inventing a custom binary format, standard Forsyth–Edwards Notation (FEN) was adopted so saved games can be inspected or imported into external chess analysis tools (such as Lichess or Chess.com). `fen_to_game` parses into a temporary `Game` struct and verifies king counts, pawn ranks, and check legality before committing the state, ensuring corrupt or impossible FEN files cannot crash the engine or leave the game in an unplayable state.
-4. **Move Validation Strategy (Pseudo-Legal Simulation vs. Ray-Tracing Pins)**:
-To enforce king safety (ensuring a player cannot move into check or fail to parry an existing check), the engine generates pseudo-legal moves and tests each on a copied game state (`Game copy = *g`). While analytical pin calculation avoids copying, duplicating the `Game` struct in C is fast and eliminates edge-case bugs such as discovered checks via en passant captures. Since `Game` holds the repetition history array, search rollouts naturally evaluate repetition draws on their local copies without polluting the main match history.
-5. **Formal Rule Verification vs. Runtime Speed (`chess.dfy`)**:
-In `chess.dfy`, `GenLegal` enumerates all $64 \times 64 \times 5$ candidate `(src, dst, promo)` triples and filters them through `IsLegalImpl`. While slower than piece-centric move generation during `Perft` execution, this uniform enumeration makes proving **completeness** (`forall m :: Legal(s, m) ==> m in moves`) clean and tractable for the SMT solver, decoupling mathematical correctness from C runtime optimization.
-6. **Input Syntax (Coordinate Notation vs. Standard Algebraic Notation)**:
-Standard Algebraic Notation (SAN), such as `Nf3` or `exd5`, requires complex disambiguation logic. Long coordinate notation (`e2e4`, `g1f3`, `e7e8q`) keeps user input unambiguous and parsing resilient. For castling, entering the king's two-square move (`e1g1` or `e1c1`) triggers castling automatically. If a pawn reaches the final rank, the user can append their promotion choice (`e7e8q`, `e7e8r`, `e7e8b`, `e7e8n`), defaulting to a queen if omitted.
+Fail-soft/fail-hard Negamax with alpha-beta pruning and MVV-LVA move ordering searches captures and promotions first, significantly reducing the effective branching factor. Lower difficulty levels respond instantaneously, while depths 5–6 typically complete within a few seconds depending on position complexity.
+3. **Save State Serialization & Validation (FEN)**:
+Adopting standard Forsyth–Edwards Notation (FEN) allows saved positions to be inspected or loaded in external tools like Lichess or Chess.com. Parsing into a temporary `Game` struct ensures malformed or illegal FEN files are rejected cleanly without corrupting an active game.
+4. **Move Validation Strategy (Copy-and-Test vs. Analytical Pin Tables)**:
+Testing each pseudo-legal candidate on a copied `Game` struct (`Game copy = *g`) avoids complex pin/discovered-check edge cases (such as horizontal en passant pins) while automatically giving search rollouts an isolated repetition history.
+5. **Formal Verification vs. Runtime Speed (`dafny/chess.dfy`)**:
+In `dafny/chess.dfy`, `GenLegal` enumerates all $64 \times 64 \times 5$ candidate `(src, dst, promo)` triples and filters them with `IsLegalImpl`. While slower during `Perft` than piece-centric generation, uniform enumeration makes proving **completeness** (`forall m :: Legal(s, m) ==> m in moves`) clean and tractable for Z3.
+6. **Input Syntax (Coordinate Notation vs. SAN)**:
+Long coordinate notation (`e2e4`, `g1f3`, `e7e8q`) eliminates SAN disambiguation complexity and keeps command-line input unambiguous, defaulting pawn promotions to Queen (`q`) if the promotion piece is omitted.
 
 ---
 
@@ -111,50 +164,57 @@ Standard Algebraic Notation (SAN), such as `Nf3` or `exd5`, requires complex dis
 
 #### C Chess Engine
 
-To compile the project using `make` (recommended):
+Build using `make`:
 
 ```bash
 make
 
 ```
 
-Or manually with `gcc`:
+Or compile manually with `gcc`:
 
 ```bash
-gcc -Wall -Wextra -std=c99 -O2 chess.c gameplay.c file_handling.c ai.c -o chess
+gcc -Wall -Wextra -std=c99 -O2 src/chess.c src/gameplay.c src/file_handling.c src/ai.c -o chess
 
 ```
 
-To start the game:
+Start the game:
 
 ```bash
 ./chess
 
 ```
 
-#### Gameplay Commands:
+Run the C `perft` test suite:
 
-* **Setup**: Choose between **Play a friend** or **Play the computer** (with 5 difficulty levels and White/Black/Random side selection).
+```bash
+make test
+
+```
+
+#### Gameplay Commands
+
+* **Setup**: Choose between **Play a friend** or **Play the computer** (5 difficulty levels, White/Black/Random side selection).
 * **Make a move**: Enter source and destination squares, e.g., `e2e4`, `g1f3`, or `e7e8q` for promotion.
 * **Castle**: Move the king two squares toward the rook, e.g., `e1g1` (White kingside) or `e1c1` (White queenside).
 * **Save game**: Type `save <filename>` (e.g., `save match1.fen`).
 * **Load game**: Type `load <filename>` (e.g., `load match1.fen`).
 * **Quit**: Type `quit`.
 
-#### Dafny Formal Verification (`chess.dfy`)
+#### Dafny Formal Verification (`dafny/chess.dfy`)
 
 Requires **Dafny 4.x** (`dafny 4.11.0` tested).
 
-To verify all specifications, loop invariants, and soundness/completeness theorems:
+Verify all 36 specifications, invariants, and theorems:
 
 ```bash
-dafny verify chess.dfy
+dafny verify dafny/chess.dfy
 
 ```
 
-To compile and run the Perft and endgame test suite:
+Compile and run the `Perft`, endgame, and draw-rule test suite:
 
 ```bash
-dafny run chess.dfy
+dafny run dafny/chess.dfy
 
 ```
